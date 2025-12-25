@@ -58,6 +58,20 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                 isFromArchive: true
             };
         }
+
+        // Check session storage for persisted result (e.g. returning from Spotify auth)
+        try {
+            const storedResult = sessionStorage.getItem('tempAnalysisResult');
+            if (storedResult) {
+                // Optional: Clear it if you want to avoid stale data, 
+                // but usually keeping it until new analysis is fine for UX.
+                // sessionStorage.removeItem('tempAnalysisResult'); 
+                return JSON.parse(storedResult);
+            }
+        } catch (e) {
+            console.error('Failed to parse stored analysis result', e);
+        }
+
         return null;
     }, [propAnalysisResult, location.state]);
 
@@ -199,6 +213,11 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
     };
 
     const handleConnectSpotify = () => {
+        // Save analysis result to session storage to persist across redirect
+        if (analysisResult) {
+            sessionStorage.setItem('tempAnalysisResult', JSON.stringify(analysisResult));
+        }
+
         // Redirect back to this page (/results) to handle the token
         const redirectUri = window.location.origin + '/results';
         window.location.href = spotifyService.getLoginUrl(redirectUri);
