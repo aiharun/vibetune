@@ -1,16 +1,40 @@
-# React + Vite
+# TasteMirror 🎵
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+TasteMirror is an AI-powered music taste analyzer that reveals your sophisticated music persona. It analyzes your Spotify playlists to provide deep insights into your musical vibe, mood analysis, and personalized recommendations.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- 🎧 **Vibe Analysis**: AI-generated detailed analysis of your music taste.
+- 📊 **Taste Profile**: Visual metrics for Energy, Melancholy, Instrumentation, and Danceability.
+- 🎵 **Smart Recommendations**: Custom song suggestions based on your unique vibe.
+- 💾 **Playlist Builder**: Create and manage custom playlists directly in the app.
+- 🟢 **Spotify Integration**: 
+  - Connect your Spotify account.
+  - Export your TasteMirror discoveries directly to your Spotify library.
+  - Two-way sync for "My List" feature.
+- 📱 **Responsive Design**: Premium, dark-themed UI that works on all devices.
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: React, Vite, Tailwind CSS, Framer Motion
+- **Backend**: Firebase (Auth, Firestore, Functions)
+- **AI**: Google Gemini API
+- **Music Data**: Spotify Web API
 
-## Expanding the ESLint configuration
+## Getting Started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1.  **Clone the repo**
+2.  **Install dependencies**: `npm install`
+3.  **Environment Variables**: Create a `.env` file with the following:
+    ```env
+    VITE_FIREBASE_API_KEY=your_key
+    VITE_FIREBASE_AUTH_DOMAIN=your_domain
+    VITE_GEMINI_API_KEY=your_key
+    VITE_SPOTIFY_CLIENT_ID=your_id
+    VITE_SPOTIFY_CLIENT_SECRET=your_secret
+    ```
+4.  **Run Development Server**: `npm run dev`
+
+## License
+
+This project is licensed under the MIT License.

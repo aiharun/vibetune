@@ -199,7 +199,8 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
     };
 
     const handleConnectSpotify = () => {
-        const redirectUri = window.location.origin;
+        // Redirect back to this page (/results) to handle the token
+        const redirectUri = window.location.origin + '/results';
         window.location.href = spotifyService.getLoginUrl(redirectUri);
     };
 
