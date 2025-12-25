@@ -253,11 +253,18 @@ class SpotifyService {
             'user-read-email'
         ];
 
-        return 'https://accounts.spotify.com/authorize' +
+        if (!SPOTIFY_CLIENT_ID) {
+            console.error('CRITICAL: SPOTIFY_CLIENT_ID is missing from environment variables!');
+        }
+
+        const authUrl = 'https://accounts.spotify.com/authorize' +
             '?response_type=token' +
             '&client_id=' + SPOTIFY_CLIENT_ID +
             '&scope=' + encodeURIComponent(scopes.join(' ')) +
             '&redirect_uri=' + encodeURIComponent(redirectUri);
+
+        console.log('Generated Spotify Auth URL:', authUrl);
+        return authUrl;
     }
 
     /**
