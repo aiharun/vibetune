@@ -81,7 +81,7 @@ class SpotifyService {
      * @param {number} limit - Çekilecek şarkı sayısı (max 20)
      * @returns {Promise<Array>} - Şarkı listesi
      */
-    async getPlaylistTracks(playlistUrl, limit = 20) {
+    async getPlaylistTracks(playlistUrl, limit = 50) {
         const playlistId = this.extractPlaylistId(playlistUrl);
 
         if (!playlistId) {
