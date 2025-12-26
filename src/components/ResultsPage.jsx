@@ -24,18 +24,45 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
     const navigate = useNavigate();
     const location = useLocation();
 
-    // Check for Spotify Access Token in URL hash (callback handling)
+    // Check for Spotify Access Token or Code (PKCE)
     useEffect(() => {
-        const token = spotifyService.getTokenFromUrl();
-        if (token) {
-            setSpotifyUserToken(token);
-            window.location.hash = ''; // Clear hash
+        const checkSpotifyAuth = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
 
-            // Get user profile
-            spotifyService.getUserProfile(token)
-                .then(profile => setSpotifyUserProfile(profile))
-                .catch(err => console.error('Spotify profile error:', err));
-        }
+            if (code) {
+                // Temiz URL için query param'ı kaldır
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+                try {
+                    const redirectUri = window.location.origin + '/results';
+                    const authData = await spotifyService.getAccessTokenFromCode(code, redirectUri);
+
+                    if (authData?.accessToken) {
+                        setSpotifyUserToken(authData.accessToken);
+
+                        // Profil bilgisini al
+                        const profile = await spotifyService.getUserProfile(authData.accessToken);
+                        setSpotifyUserProfile(profile);
+                    }
+                } catch (err) {
+                    console.error('Spotify PKCE Auth Error:', err);
+                }
+            } else {
+                // Legacy support (Explicit Grant)
+                const token = spotifyService.getTokenFromUrl();
+                if (token) {
+                    setSpotifyUserToken(token);
+                    window.location.hash = '';
+
+                    spotifyService.getUserProfile(token)
+                        .then(profile => setSpotifyUserProfile(profile))
+                        .catch(err => console.error('Spotify profile error:', err));
+                }
+            }
+        };
+
+        checkSpotifyAuth();
     }, []);
 
     // Determine analysis data from props or navigation state
@@ -212,7 +239,7 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
         navigator.clipboard.writeText(text);
     };
 
-    const handleConnectSpotify = () => {
+    const handleConnectSpotify = async () => {
         // Save analysis result to session storage to persist across redirect
         if (analysisResult) {
             sessionStorage.setItem('tempAnalysisResult', JSON.stringify(analysisResult));
@@ -220,7 +247,12 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
 
         // Redirect back to this page (/results) to handle the token
         const redirectUri = window.location.origin + '/results';
-        window.location.href = spotifyService.getLoginUrl(redirectUri);
+        try {
+            const loginUrl = await spotifyService.getLoginUrl(redirectUri);
+            window.location.href = loginUrl;
+        } catch (error) {
+            console.error('Spotify Login URL generation failed:', error);
+        }
     };
 
     const handleSaveToSpotify = async () => {

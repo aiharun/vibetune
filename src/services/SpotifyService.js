@@ -240,12 +240,92 @@ class SpotifyService {
             return null;
         }
     }
+
     /**
-     * Kullanıcı girişi için Login URL oluştur
-     * @param {string} redirectUri - Uygulamaya dönüş adresi
-     * @returns {string} - Spotify Authorize URL
+     * PKCE için rastgele string oluştur
      */
-    getLoginUrl(redirectUri) {
+    generateRandomString(length) {
+        let text = '';
+        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        for (let i = 0; i < length; i++) {
+            text += possible.charAt(Math.floor(Math.random() * possible.length));
+        }
+        return text;
+    }
+
+    /**
+     * PKCE için SHA256 hash oluştur
+     */
+    async generateCodeChallenge(codeVerifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(codeVerifier);
+        const digest = await window.crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+    }
+
+    /**
+     * Authorization Code'u Access Token ile değiştir (PKCE Flow)
+     */
+    async getAccessTokenFromCode(code, redirectUri) {
+        console.log('[SpotifyAuth] Exchanging code for token...');
+        const codeVerifier = window.sessionStorage.getItem('spotify_code_verifier');
+
+        if (!codeVerifier) {
+            throw new Error('PKCE Code Verifier bulunamadı! İşlem yeniden başlatılmalı.');
+        }
+
+        const params = new URLSearchParams({
+            client_id: SPOTIFY_CLIENT_ID,
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: redirectUri,
+            code_verifier: codeVerifier
+        });
+
+        try {
+            const response = await fetch('https://accounts.spotify.com/api/token', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: params
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('[SpotifyAuth] Token exchange failed:', errorData);
+                throw new Error(`Token alma hatası: ${errorData.error_description || errorData.error}`);
+            }
+
+            const data = await response.json();
+            console.log('[SpotifyAuth] Token exchange successful!');
+
+            // Temizlik
+            window.sessionStorage.removeItem('spotify_code_verifier');
+
+            return {
+                accessToken: data.access_token,
+                refreshToken: data.refresh_token,
+                expiresIn: data.expires_in
+            };
+        } catch (error) {
+            console.error('[SpotifyAuth] Network or parsing error:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Kullanıcı girişi için Login URL oluştur (PKCE Flow)
+     * @param {string} redirectUri - Uygulamaya dönüş adresi
+     * @returns {Promise<string>} - Spotify Authorize URL
+     */
+    async getLoginUrl(redirectUri) {
+        const platform = window.location.hostname === 'localhost' ? 'dev' : 'prod';
+        console.log(`[SpotifyAuth] Generating login URL for ${platform} mode. Redirect URI: ${redirectUri}`);
+
         const scopes = [
             'playlist-modify-public',
             'playlist-modify-private',
@@ -257,13 +337,25 @@ class SpotifyService {
             console.error('CRITICAL: SPOTIFY_CLIENT_ID is missing from environment variables!');
         }
 
-        const authUrl = 'https://accounts.spotify.com/authorize' +
-            '?response_type=token' +
-            '&client_id=' + SPOTIFY_CLIENT_ID +
-            '&scope=' + encodeURIComponent(scopes.join(' ')) +
-            '&redirect_uri=' + encodeURIComponent(redirectUri);
+        // PKCE Verifier ve Challenge oluştur
+        const codeVerifier = this.generateRandomString(128);
+        const codeChallenge = await this.generateCodeChallenge(codeVerifier);
 
-        console.log('Generated Spotify Auth URL:', authUrl);
+        // Verifier'ı kaydet (Token alırken lazım olacak)
+        window.sessionStorage.setItem('spotify_code_verifier', codeVerifier);
+
+        const params = new URLSearchParams({
+            response_type: 'code',
+            client_id: SPOTIFY_CLIENT_ID,
+            scope: scopes.join(' '),
+            redirect_uri: redirectUri,
+            code_challenge_method: 'S256',
+            code_challenge: codeChallenge
+        });
+
+        const authUrl = `https://accounts.spotify.com/authorize?${params.toString()}`;
+
+        console.log('Generated Spotify Auth URL (PKCE):', authUrl);
         return authUrl;
     }
 
