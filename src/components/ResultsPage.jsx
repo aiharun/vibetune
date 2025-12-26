@@ -207,28 +207,23 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
             const { inputType, sourceTracks, platform, vibeAnalysis } = analysisResult;
             let newRecommendations = [];
 
-            if (inputType === 'playlist' && platform === 'spotify' && sourceTracks && sourceTracks.length > 0) {
-                // For Spotify playlists, get new recommendations from Spotify API
-                newRecommendations = await spotifyService.getRecommendations(sourceTracks, tierFeatures.recommendationCount);
-
-                // Add reasons based on vibe analysis
-                newRecommendations = newRecommendations.map(rec => ({
-                    ...rec,
-                    reason: `${vibeAnalysis.mood} havanıza uygun bir öneri`
-                }));
-            } else {
-                // For manual input or non-Spotify, use AI to generate new recommendations
-                const trackData = inputType === 'playlist' ?
-                    (analysisResult.inputValue || '') : '';
-                const preferences = inputType === 'manual' ?
-                    (analysisResult.inputValue || '') : '';
-
-                const result = await aiService.analyzeAndRecommend(trackData, preferences, tierFeatures.recommendationCount);
-                newRecommendations = result.recommendations;
-
-                // Hydrate with Spotify data
-                newRecommendations = await hydrateRecommendations(newRecommendations);
+            // ALWAYS use AI for "intelligent" curation on refresh (better prompt logic involved now)
+            // Construct trackData from sourceTracks if available to ensure context is passed
+            let trackData = '';
+            if (sourceTracks && sourceTracks.length > 0) {
+                trackData = sourceTracks.map((t, i) => `${i + 1}. ${t.name} by ${t.artist || t.artistsString}`).join('\n');
+            } else if (inputType === 'playlist') {
+                trackData = analysisResult.inputValue || '';
             }
+
+            const preferences = inputType === 'manual' ? (analysisResult.inputValue || '') : '';
+
+            // Use AI Service for enhanced recommendations
+            const result = await aiService.analyzeAndRecommend(trackData, preferences, tierFeatures.recommendationCount);
+            newRecommendations = result.recommendations;
+
+            // Hydrate with Spotify data to ensure valid images/links
+            newRecommendations = await hydrateRecommendations(newRecommendations);
 
             if (newRecommendations.length > 0) {
                 setCurrentRecommendations(newRecommendations);
