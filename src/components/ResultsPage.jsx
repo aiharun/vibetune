@@ -102,12 +102,56 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
         return null;
     }, [propAnalysisResult, location.state]);
 
-    // Initialize currentRecommendations from analysisResult
+    // Helper to hydrate recommendations with Spotify data
+    const hydrateRecommendations = async (recs) => {
+        if (!recs || recs.length === 0) return [];
+
+        return await Promise.all(
+            recs.map(async (rec) => {
+                // If it already has an ID/URI and art, it's likely fine (e.g. from Spotify source)
+                if (rec.id && rec.albumArt) return rec;
+
+                try {
+                    const query = rec.spotifySearchQuery || `${rec.name} ${rec.artist}`;
+                    const spotifyTrack = await spotifyService.searchTrack(query);
+
+                    if (spotifyTrack) {
+                        // MERGE: Prioritize validated Spotify data over AI text
+                        // Keep AI's 'reason' and 'vibe' context
+                        return {
+                            ...rec, // Keep AI properties (reason, etc.)
+                            ...spotifyTrack, // Overwrite with REAL Spotify data (name, artist, art, id)
+                            spotifyUrl: spotifyTrack.spotifyUrl || rec.spotifyUrl
+                        };
+                    }
+                } catch (e) {
+                    console.warn('Failed to hydrate track:', rec.name);
+                }
+                return rec; // Fallback to AI text if search fails
+            })
+        );
+    };
+
+    // Initialize and hydrate currentRecommendations
     useEffect(() => {
-        if (analysisResult?.recommendations && !currentRecommendations) {
-            setCurrentRecommendations(analysisResult.recommendations);
-        }
-    }, [analysisResult, currentRecommendations]);
+        const initRecommendations = async () => {
+            if (analysisResult?.recommendations && !currentRecommendations) {
+                // Show placeholders first or just wait? 
+                // Better to show hydrated data to avoid "jumping" or "mismatched" flash.
+                // But we can set initial to AI recs, then update.
+                // For "unrelated" issue, better to wait or just update fast.
+
+                // Set initial (might have placeholders)
+                setCurrentRecommendations(analysisResult.recommendations);
+
+                // Then hydrate
+                const hydrated = await hydrateRecommendations(analysisResult.recommendations);
+                setCurrentRecommendations(hydrated);
+            }
+        };
+
+        initRecommendations();
+    }, [analysisResult]);
 
     useEffect(() => {
         if (!analysisResult) {
@@ -182,26 +226,8 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                 const result = await aiService.analyzeAndRecommend(trackData, preferences, tierFeatures.recommendationCount);
                 newRecommendations = result.recommendations;
 
-                // Fetch album art for AI recommendations
-                const enhancedRecs = await Promise.all(
-                    newRecommendations.map(async (rec) => {
-                        if (rec.albumArt) return rec;
-                        try {
-                            const spotifyTrack = await spotifyService.searchTrack(rec.spotifySearchQuery || `${rec.name} ${rec.artist}`);
-                            if (spotifyTrack) {
-                                return {
-                                    ...rec,
-                                    albumArt: spotifyTrack.albumArt,
-                                    spotifyUrl: spotifyTrack.spotifyUrl || rec.spotifyUrl
-                                };
-                            }
-                        } catch (e) {
-                            console.warn('Failed to get album art for:', rec.name);
-                        }
-                        return rec;
-                    })
-                );
-                newRecommendations = enhancedRecs;
+                // Hydrate with Spotify data
+                newRecommendations = await hydrateRecommendations(newRecommendations);
             }
 
             if (newRecommendations.length > 0) {
