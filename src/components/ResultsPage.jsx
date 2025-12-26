@@ -271,23 +271,37 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                 description
             );
 
-            // 2. Get URIs
-            // If we have direct URI from object use it, otherwise might need search
-            // Assuming recommendation objects have `uri` or `id` -> `spotify:track:ID`
-            const uris = playlist.map(track => {
-                if (track.uri) return track.uri;
-                if (track.id) return `spotify:track:${track.id}`;
-                return null;
-            }).filter(Boolean);
+            // 2. Get URIs (Resolve missing IDs for AI tracks)
+            const uris = [];
+            for (const track of playlist) {
+                if (track.uri) {
+                    uris.push(track.uri);
+                } else if (track.id) {
+                    uris.push(`spotify:track:${track.id}`);
+                } else {
+                    // AI recommendation without ID - Search Spotify
+                    const query = track.spotifySearchQuery || `${track.name} ${track.artist}`;
+                    try {
+                        const foundTrack = await spotifyService.searchTrack(query);
+                        if (foundTrack && foundTrack.id) {
+                            uris.push(`spotify:track:${foundTrack.id}`);
+                        } else {
+                            console.warn(`Track not found on Spotify: ${query}`);
+                        }
+                    } catch (err) {
+                        console.error(`Search failed for: ${query}`, err);
+                    }
+                }
+            }
 
             if (uris.length > 0) {
                 // 3. Add Tracks
                 await spotifyService.addTracksToPlaylist(spotifyUserToken, newPlaylist.id, uris);
-                alert(`Playlist başarıyla oluşturuldu!\n"${playlistName}"`);
+                alert(`Playlist başarıyla oluşturuldu!\n"${playlistName}"\n(${uris.length} şarkı eklendi)`);
                 setPlaylist([]); // Optional: clear playlist after save
                 setShowPlaylistPanel(false);
             } else {
-                alert('Eklenecek geçerli şarkı bulunamadı.');
+                alert('Eklenecek geçerli şarkı bulunamadı. Yapay zeka tarafından önerilen şarkılar Spotify\'da bulunamamış olabilir.');
             }
 
         } catch (error) {
