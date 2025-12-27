@@ -74,15 +74,14 @@ GÖREVİN:
 ${inputSection}
 
 ÖNERİ STRATEJİSİ:
-- KULLANICI İSTEĞİNE SAYGI (ÇOK ÖNEMLİ): Eğer kullanıcı "Bana Metallica'dan şarkı öner" dediyse, LÜTFEN Metallica şarkılarını listeye ekle. "Keşif" yapacağım diye kullanıcının net isteğini sakın görmezden gelme.
-- TÜR TUTARLILIĞI: Kullanıcı "Dark Techno" dinliyorsa, ona "Pop Rock" önerme. Tarzın derinliklerine in.
-- DUYGU BAĞI: Kullanıcı melankolik/hüzünlü parçalar seviyorsa, neşeli ve hızlı parçalarla modunu bozma.
-- BAĞLAM: "Kullanıcı X şarkısını seviyorsa, Y şarkısındaki benzer gitar riff'ini de sever" mantığıyla düşün.
+- KULLANICI İSTEĞİNE SIKI SIKIYA BAĞLI KAL (1 NUMARALI KURAL): Eğer kullanıcı "Bana Metallica öner", "Sadece Sezen Aksu istiyorum" gibi spesifik bir sanatçı belirttiyse, **ÇEŞİTLİLİK KURALINI İPTAL ET** ve SADECE o sanatçıdan (veya o sanatçılardan) şarkı öner.
+- SANATÇI ODAKLI MOD: Eğer kullanıcı sanatçı ismi verdiyse, o sanatçının en iyi ama çok bilinmeyen (deep cut) parçalarını seç.
+- KEŞİF MODU (SADECE GENEL İSTEKLERDE): Eğer kullanıcı "Rock öner" veya "Hüzünlü şarkılar" dediyse (sanatçı vermediyse), o zaman çeşitlilik yap ve farklı sanatçılar öner.
 
 KATI KURALLAR:
-1. SADECE GERÇEK, VAR OLAN ŞARKILAR: Uydurma şarkı veya sanatçı ASLA önerme.
-2. DOĞRULUK: Şarkı adı ve sanatçı adı Spotify'daki ile birebir aynı olmalı.
-3. ÇEŞİTLİLİK: Eğer kullanıcı ÖZEL BİR SANATÇI İSTEMEDİYSE, aynı sanatçıdan birden fazla şarkı önerme. Ama kullanıcı "Sadece Tarkan çal" dediyse sadece Tarkan öner.
+1. İSTEK KONTROLÜ: Kullanıcı metninde sanatçı ismi geçiyorsa, listenin %80'i o sanatçılardan oluşmalıdır.
+2. SADECE GERÇEK ŞARKILAR: Uydurma şarkı ASLA önerme.
+3. DOĞRULUK: Şarkı ve sanatçı adları Spotify ile birebir aynı olmalı.
 
 İSTENEN JSON FORMATI (Sadece bu JSON'ı döndür):
 {
