@@ -7,6 +7,7 @@ import PricingModal from './PricingModal';
 import firebaseService from '../services/FirebaseService';
 import aiService from '../services/AIService';
 import spotifyService from '../services/SpotifyService';
+import recommendationService from '../services/RecommendationService';
 import subscriptionService, { TIERS } from '../services/SubscriptionService';
 
 function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) {
@@ -198,39 +199,50 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
         setShowPricingModal(false);
     };
 
-    // Refresh recommendations
+    // Refresh recommendations logic (Seamless or Redirect)
     const handleRefresh = async () => {
         if (refreshing) return;
-
         setRefreshing(true);
+
         try {
-            const { inputType, sourceTracks, platform, vibeAnalysis } = analysisResult;
-            let newRecommendations = [];
+            // OPTION A: Seamless Refresh (If we have intentData from V2 Pipeline)
+            // User requested: "yenile diyince hiçbir sayfa değişikliği olmadan aynı sayfa içinde yenile"
+            if (analysisResult.intentData) {
+                console.log('Seamless refresh using intentData:', analysisResult.intentData);
 
-            // ALWAYS use AI for "intelligent" curation on refresh (better prompt logic involved now)
-            // Construct trackData from sourceTracks if available to ensure context is passed
-            let trackData = '';
-            if (sourceTracks && sourceTracks.length > 0) {
-                trackData = sourceTracks.map((t, i) => `${i + 1}. ${t.name} by ${t.artist || t.artistsString}`).join('\n');
-            } else if (inputType === 'playlist') {
-                trackData = analysisResult.inputValue || '';
-            }
+                // 1. Get totally new candidates using the Service
+                const processed = await recommendationService.processCandidateTracks(analysisResult.intentData, spotifyService);
+                let newRecommendations = processed.selected || [];
 
-            const preferences = inputType === 'manual' ? (analysisResult.inputValue || '') : '';
+                // 2. Hydrate (add Art/Spotify Links)
+                newRecommendations = await hydrateRecommendations(newRecommendations);
 
-            // Use AI Service for enhanced recommendations
-            const result = await aiService.analyzeAndRecommend(trackData, preferences, tierFeatures.recommendationCount);
-            newRecommendations = result.recommendations;
-
-            // Hydrate with Spotify data to ensure valid images/links
-            newRecommendations = await hydrateRecommendations(newRecommendations);
-
-            if (newRecommendations.length > 0) {
-                setCurrentRecommendations(newRecommendations);
-                // Update parent state if available
-                if (setAnalysisResult) {
-                    setAnalysisResult(prev => prev ? { ...prev, recommendations: newRecommendations } : prev);
+                // 3. Update State Locally
+                if (newRecommendations.length > 0) {
+                    setCurrentRecommendations(newRecommendations);
+                    if (setAnalysisResult) {
+                        setAnalysisResult(prev => ({
+                            ...prev,
+                            recommendations: newRecommendations,
+                            // Verify and update Vibe Stats (Energy, Melancholy etc.) from real audio features
+                            vibeAnalysis: {
+                                ...prev.vibeAnalysis,
+                                ...processed.vibeStats // Merge new calculated stats
+                            }
+                        }));
+                    }
                 }
+            } else {
+                // OPTION B: Fallback Redirect (If no intentData available, e.g. legacy/archive result)
+                // Redirects to LandingPage to re-parse and run analysis
+                navigate('/', {
+                    state: {
+                        autoRun: true,
+                        inputType: analysisResult.inputType,
+                        inputValue: analysisResult.inputValue,
+                        // intentData might be missing here, so LandingPage will re-parse.
+                    }
+                });
             }
         } catch (error) {
             console.error('Refresh error:', error);
@@ -243,7 +255,7 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
     const addToPlaylist = (song) => {
         if (!playlist.find(s => s.name === song.name && s.artist === song.artist)) {
             setPlaylist(prev => [...prev, song]);
-            if (!showPlaylistPanel) setShowPlaylistPanel(true);
+            // Panel auto-open removed - user can open manually
         }
     };
 
@@ -350,6 +362,7 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                     isLocked={!tierFeatures.detailedAnalysis}
                     onUpgradeClick={() => setShowPricingModal(true)}
                     fullWidth={true}
+                    userPrompt={analysisResult.inputType === 'manual' ? analysisResult.inputValue : ''}
                 />
 
                 {/* Action Buttons */}
@@ -417,7 +430,7 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
-                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
                 >
                     {recommendations.map((song, i) => (
                         <SongCard
@@ -480,7 +493,7 @@ function ResultsPage({ analysisResult: propAnalysisResult, setAnalysisResult }) 
                         initial={{ y: 100, opacity: 0 }}
                         animate={{ y: 0, opacity: 1 }}
                         exit={{ y: 100, opacity: 0 }}
-                        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-2xl px-4"
+                        className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4"
                     >
                         <div className="bg-[#111] border border-[#333] rounded-2xl shadow-2xl overflow-hidden">
                             {/* Header */}

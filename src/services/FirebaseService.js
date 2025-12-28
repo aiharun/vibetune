@@ -488,6 +488,39 @@ class FirebaseService {
         return onAuthStateChanged(this.auth, callback);
     }
 
+    /**
+     * Update user's connected platform ID
+     * @param {string} platformKey - Platform key (spotifyId, ytMusicId, etc.)
+     * @param {string} platformId - User's ID on that platform
+     */
+    async updateUserPlatform(platformKey, platformId) {
+        if (!this.db || !this.user) return;
+
+        try {
+            const userRef = doc(this.db, 'users', this.user.uid);
+            await updateDoc(userRef, { [`platforms.${platformKey}`]: platformId });
+        } catch (error) {
+            console.error('Update platform error:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Disconnect a platform (clear the ID)
+     * @param {string} platformKey - Platform key to disconnect
+     */
+    async disconnectPlatform(platformKey) {
+        if (!this.db || !this.user) return;
+
+        try {
+            const userRef = doc(this.db, 'users', this.user.uid);
+            await updateDoc(userRef, { [`platforms.${platformKey}`]: '' });
+        } catch (error) {
+            console.error('Disconnect platform error:', error);
+            throw error;
+        }
+    }
+
     // ==================== ADMIN METHODS ====================
 
     /**

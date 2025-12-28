@@ -237,8 +237,435 @@ class SpotifyService {
             };
         } catch (error) {
             console.error('Spotify search error:', error);
+        }
+    }
+
+    /**
+     * Sanatçı ismine göre şarkılarını getir
+     * @param {string} artistName - Sanatçı adı
+     * @param {number} limit - Maksimum şarkı sayısı
+     * @returns {Promise<Array>} - Sanatçının şarkıları
+     */
+    async searchArtistTracks(artistName, limit = 50) {
+        try {
+            const token = await this.getAccessToken();
+
+            // Önce sanatçıyı bul
+            const artistResponse = await fetch(
+                `https://api.spotify.com/v1/search?q=${encodeURIComponent(artistName)}&type=artist&limit=1`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+
+            if (!artistResponse.ok) return [];
+
+            const artistData = await artistResponse.json();
+            const artist = artistData.artists?.items?.[0];
+
+            if (!artist) return [];
+
+            // Sanatçının top tracks'ini al
+            const topTracksResponse = await fetch(
+                `https://api.spotify.com/v1/artists/${artist.id}/top-tracks?market=TR`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+
+            let tracks = [];
+
+            if (topTracksResponse.ok) {
+                const topData = await topTracksResponse.json();
+                tracks = topData.tracks || [];
+            }
+
+            // Eğer yeterli değilse, sanatçının albümlerinden daha fazla şarkı çek
+            if (tracks.length < limit) {
+                const albumsResponse = await fetch(
+                    `https://api.spotify.com/v1/artists/${artist.id}/albums?include_groups=album,single&limit=10&market=TR`,
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+
+                if (albumsResponse.ok) {
+                    const albumsData = await albumsResponse.json();
+                    const albums = albumsData.items || [];
+
+                    for (const album of albums.slice(0, 5)) {
+                        if (tracks.length >= limit) break;
+
+                        const albumTracksResponse = await fetch(
+                            `https://api.spotify.com/v1/albums/${album.id}/tracks?limit=20`,
+                            { headers: { 'Authorization': `Bearer ${token}` } }
+                        );
+
+                        if (albumTracksResponse.ok) {
+                            const albumTracksData = await albumTracksResponse.json();
+                            const albumTracks = albumTracksData.items || [];
+
+                            for (const track of albumTracks) {
+                                if (!tracks.find(t => t.name === track.name)) {
+                                    tracks.push({
+                                        ...track,
+                                        album: album,
+                                        artists: track.artists || [{ name: artist.name }]
+                                    });
+                                }
+                                if (tracks.length >= limit) break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return tracks.slice(0, limit).map(track => ({
+                id: track.id,
+                name: track.name,
+                artist: track.artists?.map(a => a.name).join(', ') || artist.name,
+                album: track.album?.name || '',
+                albumArt: track.album?.images?.[0]?.url || null,
+                spotifyUrl: track.external_urls?.spotify || `https://open.spotify.com/track/${track.id}`,
+                spotifyUri: track.uri || `spotify:track:${track.id}`,
+                previewUrl: track.preview_url || null
+            }));
+
+        } catch (error) {
+            console.error('Search artist tracks error:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Birden fazla sanatçının şarkılarını getir
+     * @param {Array<string>} artistNames - Sanatçı isimleri
+     * @param {number} tracksPerArtist - Her sanatçıdan kaç şarkı
+     * @returns {Promise<Array>} - Tüm sanatçıların şarkıları
+     */
+    async searchMultipleArtistsTracks(artistNames, tracksPerArtist = 20) {
+        const allTracks = [];
+
+        for (const artistName of artistNames) {
+            const tracks = await this.searchArtistTracks(artistName.trim(), tracksPerArtist);
+            allTracks.push(...tracks);
+        }
+
+        return allTracks;
+    }
+
+    /**
+     * Genel arama sorgusu ile şarkı bul (tür, mood, açıklama için)
+     * @param {string} query - Arama sorgusu (örn: "sad Turkish pop", "energetic workout")
+     * @param {number} limit - Maksimum şarkı sayısı
+     * @returns {Promise<Array>} - Bulunan şarkılar
+     */
+    async searchByQuery(query, limit = 50) {
+        try {
+            const token = await this.getAccessToken();
+
+            // Translate Turkish mood words to better Spotify search terms
+            let searchQuery = query.toLowerCase();
+            const isSlow = searchQuery.includes('slow') || searchQuery.includes('yavaş') || searchQuery.includes('sakin');
+            const isFast = searchQuery.includes('hızlı') || searchQuery.includes('enerjik') || searchQuery.includes('dans');
+
+            // Detect language preference
+            const wantsTurkish = searchQuery.includes('türkçe') || searchQuery.includes('türk') || searchQuery.includes('turkce');
+            const wantsEnglish = searchQuery.includes('ingilizce') || searchQuery.includes('english') || searchQuery.includes('yabancı');
+            const languageFilter = wantsTurkish ? ' turkish' : wantsEnglish ? ' english' : '';
+
+            // Build better search query
+            if (isSlow) {
+                searchQuery = 'ballad OR acoustic OR slow' + languageFilter;
+            } else if (isFast) {
+                searchQuery = 'dance OR party OR upbeat' + languageFilter;
+            } else {
+                // Keep original query but add language filter
+                searchQuery = query + languageFilter;
+            }
+
+            // Spotify search with multiple offset calls to get variety
+            const allTracks = [];
+            const offsetSteps = [0, 25, 50, 75];
+
+            // Use market parameter for language filtering
+            const market = wantsTurkish ? 'TR' : wantsEnglish ? 'US' : '';
+            const marketParam = market ? `&market=${market}` : '';
+
+            for (const offset of offsetSteps) {
+                if (allTracks.length >= limit * 2) break;
+
+                const response = await fetch(
+                    `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=25&offset=${offset}${marketParam}`,
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+
+                if (!response.ok) continue;
+
+                const data = await response.json();
+                const tracks = data.tracks?.items || [];
+
+                for (const track of tracks) {
+                    const nameLower = track.name.toLowerCase();
+
+                    // Filter out obviously wrong matches
+                    if (isSlow) {
+                        // Skip fast-sounding songs for slow query
+                        if (nameLower.includes('hızlı') || nameLower.includes('halay') ||
+                            nameLower.includes('remix') || nameLower.includes('party') ||
+                            nameLower.includes('dance')) {
+                            continue;
+                        }
+                    }
+
+                    if (!allTracks.find(t => t.id === track.id)) {
+                        allTracks.push({
+                            id: track.id,
+                            name: track.name,
+                            artist: track.artists.map(a => a.name).join(', '),
+                            artistPrimary: track.artists[0]?.name || '',
+                            album: track.album.name,
+                            albumArt: track.album.images[0]?.url || null,
+                            spotifyUrl: track.external_urls.spotify,
+                            spotifyUri: track.uri,
+                            previewUrl: track.preview_url
+                        });
+                    }
+                }
+            }
+
+            // Limit tracks per artist to ensure variety
+            const artistCount = {};
+            const diverseTracks = allTracks.filter(track => {
+                const artist = track.artistPrimary.toLowerCase();
+                artistCount[artist] = (artistCount[artist] || 0) + 1;
+                return artistCount[artist] <= 2;
+            });
+
+            // Shuffle for randomness
+            const shuffled = diverseTracks.sort(() => Math.random() - 0.5);
+
+            return shuffled.slice(0, limit);
+
+        } catch (error) {
+            console.error('Search by query error:', error);
+            return [];
+        }
+    }
+
+    /**
+     * STAGE B: LLM'den gelen çoklu sorguları paralel çalıştır
+     * @param {Array} queries - Arama sorguları
+     * @returns {Promise<Array>} - Benzersiz şarkı havuzu
+     */
+    async searchMultipleQueries(queries) {
+        if (!queries || queries.length === 0) return [];
+
+        console.log('Running Stage B - Multi-Search:', queries);
+
+        const token = await this.getAccessToken();
+        const allTracks = [];
+        const seenIds = new Set();
+
+        // Execute all queries in parallel
+        const promises = queries.map(query => this.searchRaw(query, token));
+        const results = await Promise.all(promises);
+
+        // Flatten and deduplicate
+        results.flat().forEach(track => {
+            if (!seenIds.has(track.id)) {
+                seenIds.add(track.id);
+                allTracks.push(track);
+            }
+        });
+
+        console.log(`Stage B Complete: Found ${allTracks.length} unique tracks.`);
+        return allTracks;
+    }
+
+    /**
+     * Ham Spotify araması - Akıllı filtreler olmadan direkt API sorgusu
+     * @param {string} query 
+     * @param {string} token 
+     */
+    async searchRaw(query, token) {
+        try {
+            // Market belirleme: Sorgu "turkish" içeriyorsa TR, yoksa US
+            const market = query.toLowerCase().includes('turkish') || query.toLowerCase().includes('türk') ? 'TR' : 'US';
+
+            const response = await fetch(
+                `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=20&market=${market}`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+
+            if (!response.ok) return [];
+
+            const data = await response.json();
+            return (data.tracks?.items || []).map(track => ({
+                id: track.id,
+                name: track.name,
+                artist: track.artists.map(a => a.name).join(', '),
+                artistPrimary: track.artists[0]?.name || '',
+                album: track.album.name,
+                albumArt: track.album.images[0]?.url || null,
+                spotifyUrl: track.external_urls.spotify,
+                spotifyUri: track.uri,
+                previewUrl: track.preview_url,
+                popularity: track.popularity
+            }));
+        } catch (error) {
+            console.error('Raw search error:', error);
+            return [];
+        }
+    }
+
+    /**
+     * STAGE D: Şarkıların audio özelliklerini (tempo, energy, etc.) al
+     * @param {Array<string>} trackIds - Spotify Track ID listesi (Max 100)
+     * @returns {Promise<Object>} - ID -> Features haritası
+     */
+    async getAudioFeatures(trackIds) {
+        if (!trackIds || trackIds.length === 0) return {};
+
+        const token = await this.getAccessToken();
+        // Spotify allows max 100 IDs per call
+        const chunks = [];
+        for (let i = 0; i < trackIds.length; i += 100) {
+            chunks.push(trackIds.slice(i, i + 100));
+        }
+
+        const featuresMap = {};
+
+        try {
+            for (const chunk of chunks) {
+                const ids = chunk.join(',');
+                const response = await fetch(`https://api.spotify.com/v1/audio-features?ids=${ids}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    (data.audio_features || []).forEach(feat => {
+                        if (feat) featuresMap[feat.id] = feat;
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Get Audio Features Error:', error);
+        }
+        return featuresMap;
+    }
+
+    /**
+     * STAGE C (Advanced): Spotify Recommendations API ile özellikleri hedeflenmiş şarkılar çek
+     * @param {Object} params - { seed_genres, target_energy, max_energy, market, etc. }
+     */
+    async getRecommendationsAdvanced(params) {
+        try {
+            const token = await this.getAccessToken();
+            const urlParams = new URLSearchParams({
+                limit: 100,
+                market: params.market || 'TR'
+            });
+
+            if (params.seed_genres) urlParams.append('seed_genres', params.seed_genres);
+            if (params.target_energy) urlParams.append('target_energy', params.target_energy);
+            if (params.max_energy) urlParams.append('max_energy', params.max_energy);
+            if (params.target_tempo) urlParams.append('target_tempo', params.target_tempo);
+            if (params.max_tempo) urlParams.append('max_tempo', params.max_tempo);
+            if (params.min_popularity) urlParams.append('min_popularity', params.min_popularity);
+
+            const response = await fetch(`https://api.spotify.com/v1/recommendations?${urlParams.toString()}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!response.ok) return [];
+
+            const data = await response.json();
+            return (data.tracks || []).map(this._formatTrack);
+        } catch (error) {
+            console.error('Advanced Recs Error:', error);
+            return [];
+        }
+    }
+
+    // Helper to format track object uniformly
+    _formatTrack(track) {
+        return {
+            id: track.id,
+            name: track.name,
+            artist: track.artists.map(a => a.name).join(', '),
+            artistPrimary: track.artists[0]?.name || '',
+            album: track.album.name,
+            albumArt: track.album.images?.[0]?.url || null,
+            spotifyUrl: track.external_urls?.spotify,
+            spotifyUri: track.uri,
+            previewUrl: track.preview_url,
+            popularity: track.popularity
+        };
+    }
+
+    /**
+     * Sanatçı isminden en iyi eşleşen sanatçıyı bulur
+     */
+    async searchArtist(artistName) {
+        if (!artistName) return null;
+        try {
+            const token = await this.getAccessToken();
+            const response = await fetch(
+                `https://api.spotify.com/v1/search?q=${encodeURIComponent(artistName)}&type=artist&limit=1&market=TR`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+
+            if (!response.ok) return null;
+            const data = await response.json();
+            const artist = data.artists?.items[0];
+            return artist ? { id: artist.id, name: artist.name } : null;
+        } catch (e) {
+            console.error('Search artist error:', e);
             return null;
         }
+    }
+
+    /**
+     * Sanatçının en popüler şarkılarını çeker
+     */
+    async getArtistTopTracks(artistId) {
+        if (!artistId) return [];
+        try {
+            const token = await this.getAccessToken();
+            const response = await fetch(
+                `https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=TR`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+
+            if (!response.ok) return [];
+            const data = await response.json();
+            return (data.tracks || []).map(this._formatTrack);
+        } catch (e) {
+            console.error('Get artist top tracks error:', e);
+            return [];
+        }
+    }
+
+    async searchPlaylists(query, limit = 3) {
+        try {
+            const token = await this.getAccessToken();
+            const market = query.toLowerCase().includes('türk') ? 'TR' : 'US';
+            const response = await fetch(
+                `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=playlist&limit=${limit}&market=${market}`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+            );
+            if (!response.ok) return [];
+            const data = await response.json();
+            return data.playlists?.items || [];
+        } catch (e) { return []; }
+    }
+
+    async getPlaylistTracks(playlistId) {
+        try {
+            const token = await this.getAccessToken();
+            const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=50`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) return [];
+            const data = await response.json();
+            return (data.items || []).map(item => item.track ? this._formatTrack(item.track) : null).filter(Boolean);
+        } catch (e) { return []; }
     }
 
     /**

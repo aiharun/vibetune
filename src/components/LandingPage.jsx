@@ -1,15 +1,19 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import playlistService from '../services/PlaylistService';
 import aiService from '../services/AIService';
 import spotifyService from '../services/SpotifyService';
+import recommendationService from '../services/RecommendationService';
 import firebaseService from '../services/FirebaseService';
 import subscriptionService, { TIERS } from '../services/SubscriptionService';
 import AuthModal from './AuthModal';
 import PricingModal from './PricingModal';
 
 function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
+    const location = useLocation();
+    const [autoStart, setAutoStart] = useState(false);
+    const pendingIntentRef = useRef(null);
     const [inputType, setInputType] = useState('playlist');
     const [inputValue, setInputValue] = useState('');
     const [error, setError] = useState('');
@@ -18,6 +22,27 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
     const [userProfile, setUserProfile] = useState(null);
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [showPricingModal, setShowPricingModal] = useState(false);
+
+    // Auto-Run Effect (Triggered by Refresh/Retry from ResultsPage)
+    useEffect(() => {
+        if (location.state?.autoRun) {
+            const { inputValue: newVal, inputType: newType, intentData: passedIntent } = location.state;
+            if (newVal) setInputValue(newVal);
+            if (newType) setInputType(newType);
+            if (passedIntent) pendingIntentRef.current = passedIntent;
+            setAutoStart(true);
+            // Clear history state to prevent loop
+            window.history.replaceState({}, document.title);
+        }
+    }, [location]);
+
+    useEffect(() => {
+        if (autoStart && inputValue) {
+            handleAnalyze(null, pendingIntentRef.current);
+            pendingIntentRef.current = null;
+            setAutoStart(false);
+        }
+    }, [autoStart, inputValue]);
     const navigate = useNavigate();
 
     // Auth state listener
@@ -34,6 +59,44 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
         });
         return () => unsubscribe();
     }, []);
+
+    // Handle Spotify OAuth callback (from Profile Settings connection)
+    useEffect(() => {
+        const handleSpotifyCallback = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const connectSource = sessionStorage.getItem('spotify_connect_source');
+
+            if (code && connectSource === 'profile') {
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+                sessionStorage.removeItem('spotify_connect_source');
+
+                try {
+                    const redirectUri = window.location.origin + '/';
+                    const authData = await spotifyService.getAccessTokenFromCode(code, redirectUri);
+
+                    if (authData?.accessToken) {
+                        // Save token to session
+                        sessionStorage.setItem('spotify_access_token', authData.accessToken);
+
+                        // Get user profile and save to Firebase
+                        const spotifyProfile = await spotifyService.getUserProfile(authData.accessToken);
+                        if (spotifyProfile && user) {
+                            await firebaseService.updateUserPlatform('spotifyId', spotifyProfile.id);
+                            // Refresh user profile
+                            const profile = await firebaseService.getUserProfile();
+                            setUserProfile(profile);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Spotify connect callback error:', error);
+                }
+            }
+        };
+
+        handleSpotifyCallback();
+    }, [user]);
 
     // Detect platform as user types
     const detectedPlatform = useMemo(() => {
@@ -59,7 +122,8 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
         return subscriptionService.isPlatformSupported(userProfile.tier, detectedPlatform.id);
     }, [detectedPlatform, userProfile]);
 
-    const handleAnalyze = async () => {
+    const handleAnalyze = async (e, overrideIntentData) => {
+        if (e && e.preventDefault) e.preventDefault();
         // Auth check
         if (!user) {
             setShowAuthModal(true);
@@ -91,6 +155,7 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
             let trackData = '';
             let sourceTracks = [];
             let platform = null;
+            let intentData = {};
 
             if (inputType === 'playlist') {
                 console.log('Fetching playlist data for:', inputValue);
@@ -108,15 +173,75 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
                 }
             }
 
-            console.log('Starting AI analysis...', { inputType, trackData: trackData?.slice(0, 100), userPreferences: inputType === 'manual' ? inputValue : '', recCount: tierFeatures.recommendationCount });
+            let result;
 
-            const result = await aiService.analyzeAndRecommend(
-                inputType === 'playlist' ? trackData : '',
-                inputType === 'manual' ? inputValue : '',
-                tierFeatures.recommendationCount
-            );
+            // Check for artist names in manual input
+            if (inputType === 'manual') {
+                console.log('Manual input:', inputValue);
 
-            console.log('AI analysis complete:', result);
+                // --- NEW V2 PIPELINE (Audio-Feature Based) ---
+                let newFlowSuccess = false;
+                let stats = {};
+
+                try {
+                    console.log('Starting V2 Pipeline (Stage A-F)...');
+
+                    // STAGE A: Intent Parsing (LLM) - Skip if overriding intent provided
+                    // This allows "Refresh" to get new songs with SAME prompt/intent
+                    intentData = overrideIntentData || await aiService.parseUserIntent(inputValue);
+                    console.log('Stage A (Intent):', intentData);
+
+                    // STAGE B, C, D, E: Candidate Processing (Code)
+                    // Query Build -> Spotify Search -> Audio Filter -> Diversity
+                    const processed = await recommendationService.processCandidateTracks(intentData, spotifyService);
+                    const filteredTracks = processed.selected || [];
+                    stats = processed.stats || {};
+
+                    if (filteredTracks.length > 0) {
+                        // STAGE F: Explanation (LLM)
+                        result = await aiService.explainTracks(filteredTracks, intentData);
+
+                        // MERGE GROUND TRUTH STATS
+                        if (processed.vibeStats) {
+                            result.vibeAnalysis = {
+                                ...result.vibeAnalysis,
+                                ...processed.vibeStats
+                            };
+                        }
+
+                        newFlowSuccess = true;
+                        console.log('Stage F (Explanation): Done');
+                    } else {
+                        console.warn('V2 Pipeline: No tracks passed strict filters.', stats);
+                    }
+                } catch (e) {
+                    console.error('V2 Pipeline Error:', e);
+                }
+
+                if (!newFlowSuccess) {
+                    console.log('Strict Pipeline Failure: No tracks found or API error.');
+
+                    const failReason = stats.total > 0
+                        ? `Analiz Edilen: ${stats.total} şarkı. \nElenenler:\n- ${stats.genreFiltered} şarkı kara listeden (Rap/Remix)\n- ${stats.audioFiltered} şarkı Enerji/BPM kriterinden\n- ${stats.audioMissing} şarkı veri eksikliğinden.\nGeriye kalan aday sayısı: 0`
+                        : 'Spotify ve Playlist taramalarından (Türkçe Slow vb.) hiç aday şarkı gelmedi. Bağlantı sorunu olabilir.';
+
+                    // STRICT FAIL: Return detailed empty result
+                    result = {
+                        vibeAnalysis: {
+                            mood: 'Sonuç Bulunamadı (Strict Mode)',
+                            vibeDescription: `Maalesef kriterlerine tam uyan şarkı bulunamadı.\n\n${failReason}\n\nLütfen aramayı "slow pop" gibi biraz daha genelleyerek tekrar dene.`,
+                            dominantGenres: intentData.explicit_genres || []
+                        },
+                        recommendations: []
+                    };
+                }
+            } else {
+                // PLAYLIST MODE
+                console.log('Playlist mode - analyzing tracks...');
+                result = await aiService.analyzeAndRecommend(trackData, '', tierFeatures.recommendationCount);
+            }
+
+            console.log('Analysis complete:', result);
 
             // For Spotify playlists, get real recommendations from Spotify API
             let finalRecommendations = result.recommendations;
@@ -167,7 +292,7 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
                 firebaseService.getUserProfile().then(newProfile => setUserProfile(newProfile));
             }).catch(err => console.error('Failed to update credits:', err));
 
-            setAnalysisResult?.({ ...result, recommendations: finalRecommendations, inputType, inputValue, sourceTracks, platform });
+            setAnalysisResult?.({ ...result, recommendations: finalRecommendations, inputType, inputValue, sourceTracks, platform, intentData });
             navigate('/results');
         } catch (err) {
             console.error('Analysis error:', err);
@@ -198,7 +323,11 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
                 >
                     {/* Badge */}
                     <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#1a1a1a] border border-[#2a2a2a] mb-8">
-                        <span className="text-orange-400">✦</span>
+                        <span className="text-orange-400">
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
+                            </svg>
+                        </span>
                         <span className="text-sm text-neutral-300">AI-Powered Music Analysis</span>
                     </div>
 
@@ -530,5 +659,8 @@ function LandingPage({ setAnalysisResult, setIsAnalyzing }) {
         </div>
     );
 }
+
+/* Helper Function for Stage B, D, E - Orchestration & Filtering */
+/* Helper Function moved to RecommendationService.js */
 
 export default LandingPage;
